@@ -1,6 +1,18 @@
 const socket = io();
 
-const REACTION_EMOJI = ['👍', '😂', '🔥', '😱', '🎉', '😭'];
+const REACTION_EMOJI = ['👍', '😂', '🔥', '😱', '🎉', '😭', '🌴', '💥'];
+
+// Original Malayalam party-game exclamations (not tied to any real person
+// or ad) used as fun voice-line reactions, spoken via the browser's
+// text-to-speech when a Malayalam voice is available.
+const VOICE_LINES = [
+  { id: 'adipoli', label: 'Adipoli!', text: 'Adipoli!' },
+  { id: 'kidilan', label: 'Kidilan!', text: 'Kidilan!' },
+  { id: 'poli', label: 'Poli aanu!', text: 'Poli aanu!' },
+  { id: 'sheri', label: 'Sheri sheri!', text: 'Sheri sheri!' },
+  { id: 'ayyo', label: 'Ayyo!', text: 'Ayyo!' },
+  { id: 'machane', label: 'Machane!', text: 'Machane!' },
+];
 
 const state = {
   name: '',
@@ -9,6 +21,8 @@ const state = {
   maxPlayers: 3,
   winPattern: 'lines',
   speedSeconds: 0,
+  boardMode: 'random',
+  setupSeconds: 120,
   isHost: false,
   board: null,
   markedSet: new Set(), // "r-c" of cells marked locally
@@ -19,6 +33,9 @@ const state = {
   players: [],
   soundOn: true,
   timerInterval: null,
+  setupTimerInterval: null,
+  setupBoard: null, // n x n grid, 0 = empty
+  setupSelectedCell: null, // [r, c] or null
 };
 
 // ---------- Sound & voice ----------
@@ -54,6 +71,21 @@ function speakNumber(number) {
   const utter = new SpeechSynthesisUtterance(`Number ${number}!`);
   utter.rate = 1.1;
   utter.pitch = 1.05;
+  window.speechSynthesis.speak(utter);
+}
+
+function speakLine(text) {
+  if (!state.soundOn) return;
+  if (!window.speechSynthesis) return;
+  window.speechSynthesis.cancel();
+  const utter = new SpeechSynthesisUtterance(text);
+  // Prefer a Malayalam voice if the browser/OS has one installed; otherwise
+  // this just falls back to whatever default voice reads it phonetically.
+  const voices = window.speechSynthesis.getVoices();
+  const mlVoice = voices.find((v) => v.lang && v.lang.toLowerCase().startsWith('ml'));
+  if (mlVoice) utter.voice = mlVoice;
+  utter.rate = 1;
+  utter.pitch = 1.1;
   window.speechSynthesis.speak(utter);
 }
 
@@ -103,6 +135,23 @@ document.getElementById('win-pattern-picker').addEventListener('click', (e) => {
   state.winPattern = btn.dataset.pattern;
 });
 
+document.getElementById('board-mode-picker').addEventListener('click', (e) => {
+  const btn = e.target.closest('.chip');
+  if (!btn) return;
+  document.querySelectorAll('#board-mode-picker .chip').forEach((c) => c.classList.remove('active'));
+  btn.classList.add('active');
+  state.boardMode = btn.dataset.mode;
+  document.getElementById('setup-seconds-field').classList.toggle('hidden', state.boardMode !== 'manual');
+});
+
+document.getElementById('setup-seconds-picker').addEventListener('click', (e) => {
+  const btn = e.target.closest('.chip');
+  if (!btn) return;
+  document.querySelectorAll('#setup-seconds-picker .chip').forEach((c) => c.classList.remove('active'));
+  btn.classList.add('active');
+  state.setupSeconds = Number(btn.dataset.setupSeconds);
+});
+
 document.getElementById('speed-picker').addEventListener('click', (e) => {
   const btn = e.target.closest('.chip');
   if (!btn) return;
@@ -121,6 +170,8 @@ document.getElementById('btn-create-room').addEventListener('click', () => {
     maxPlayers: state.maxPlayers,
     winPattern: state.winPattern,
     speedSeconds: state.speedSeconds,
+    boardMode: state.boardMode,
+    setupSeconds: state.setupSeconds,
   }, (res) => {
     if (!res.ok) {
       document.getElementById('create-error').textContent = res.error || 'Could not create room.';
@@ -153,20 +204,23 @@ document.getElementById('btn-join-room').addEventListener('click', () => {
 // ---------- Lobby ----------
 const PATTERN_LABELS = {
   lines: 'Classic — 5 Lines',
-  corners: 'Four Corners',
   x: 'X Marks the Spot',
-  blackout: 'Blackout',
 };
 
 function renderLobby(room) {
   state.gridSize = room.gridSize;
   state.winPattern = room.winPattern || 'lines';
   state.speedSeconds = room.speedSeconds || 0;
+  state.boardMode = room.boardMode || 'random';
+  state.setupSeconds = room.setupSeconds || 120;
   document.getElementById('lobby-code').textContent = room.code;
   document.getElementById('lobby-size').textContent = `${room.gridSize}×${room.gridSize} board · up to ${room.maxPlayers} players`;
   const speedLabel = state.speedSeconds ? `${state.speedSeconds}s per turn` : 'no timer';
+  const boardModeLabel = state.boardMode === 'manual'
+    ? `Manual boards (${state.setupSeconds / 60} min to fill)`
+    : 'Random boards';
   document.getElementById('lobby-settings').textContent =
-    `${PATTERN_LABELS[state.winPattern] || 'Classic'} · ${speedLabel}` + (room.round > 1 ? ` · Round ${room.round}` : '');
+    `${PATTERN_LABELS[state.winPattern] || 'Classic'} · ${boardModeLabel} · ${speedLabel}` + (room.round > 1 ? ` · Round ${room.round}` : '');
   const list = document.getElementById('lobby-players');
   list.innerHTML = '';
   room.players.forEach((p) => {
@@ -223,8 +277,179 @@ socket.on('returned-to-lobby', () => {
   showScreen('screen-lobby');
 });
 
+// ---------- Manual board setup ----------
+socket.on('setup-started', ({ gridSize, setupSeconds, setupDeadline, players }) => {
+  state.gridSize = gridSize;
+  state.setupSeconds = setupSeconds;
+  state.setupBoard = Array.from({ length: gridSize }, () => Array(gridSize).fill(0));
+  state.setupSelectedCell = null;
+  state.players = players;
+  document.getElementById('setup-waiting').classList.add('hidden');
+  document.getElementById('btn-submit-board').disabled = true;
+  buildSetupBoard();
+  buildNumberPad();
+  renderSetupProgress([]);
+  startSetupTimerUI(setupDeadline, setupSeconds);
+  showScreen('screen-setup');
+});
+
+function buildSetupBoard() {
+  const boardEl = document.getElementById('setup-board');
+  boardEl.style.gridTemplateColumns = `repeat(${state.gridSize}, 1fr)`;
+  boardEl.innerHTML = '';
+  for (let r = 0; r < state.gridSize; r++) {
+    for (let c = 0; c < state.gridSize; c++) {
+      const cell = document.createElement('div');
+      cell.className = 'cell setup-cell';
+      cell.dataset.row = r;
+      cell.dataset.col = c;
+      const val = state.setupBoard[r][c];
+      cell.textContent = val || '';
+      cell.addEventListener('click', () => selectSetupCell(r, c));
+      boardEl.appendChild(cell);
+    }
+  }
+}
+
+function selectSetupCell(r, c) {
+  state.setupSelectedCell = [r, c];
+  document.querySelectorAll('.setup-cell').forEach((el) => {
+    el.classList.toggle('selected', Number(el.dataset.row) === r && Number(el.dataset.col) === c);
+  });
+}
+
+function buildNumberPad() {
+  const total = state.gridSize * state.gridSize;
+  const pad = document.getElementById('number-pad');
+  pad.innerHTML = '';
+  for (let n = 1; n <= total; n++) {
+    const btn = document.createElement('button');
+    btn.className = 'pad-btn';
+    btn.textContent = n;
+    btn.dataset.number = n;
+    btn.addEventListener('click', () => placeNumber(n));
+    pad.appendChild(btn);
+  }
+  refreshNumberPad();
+}
+
+function usedNumbers() {
+  const used = new Set();
+  for (const row of state.setupBoard) for (const v of row) if (v) used.add(v);
+  return used;
+}
+
+function refreshNumberPad() {
+  const used = usedNumbers();
+  document.querySelectorAll('.pad-btn').forEach((btn) => {
+    const n = Number(btn.dataset.number);
+    btn.disabled = used.has(n);
+  });
+  const total = state.gridSize * state.gridSize;
+  document.getElementById('btn-submit-board').disabled = used.size < total;
+}
+
+function placeNumber(n) {
+  if (!state.setupSelectedCell) {
+    showToast('Tap a cell on the board first, then a number.');
+    return;
+  }
+  const used = usedNumbers();
+  if (used.has(n)) return; // already placed elsewhere
+  const [r, c] = state.setupSelectedCell;
+  state.setupBoard[r][c] = n;
+  const cellEl = document.querySelector(`.setup-cell[data-row="${r}"][data-col="${c}"]`);
+  if (cellEl) cellEl.textContent = n;
+  refreshNumberPad();
+}
+
+document.getElementById('btn-clear-board').addEventListener('click', () => {
+  state.setupBoard = state.setupBoard.map((row) => row.map(() => 0));
+  buildSetupBoard();
+  refreshNumberPad();
+});
+
+document.getElementById('btn-shuffle-remaining').addEventListener('click', () => {
+  const total = state.gridSize * state.gridSize;
+  const used = usedNumbers();
+  const remaining = [];
+  for (let n = 1; n <= total; n++) if (!used.has(n)) remaining.push(n);
+  for (let i = remaining.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [remaining[i], remaining[j]] = [remaining[j], remaining[i]];
+  }
+  let idx = 0;
+  for (let r = 0; r < state.gridSize; r++) {
+    for (let c = 0; c < state.gridSize; c++) {
+      if (!state.setupBoard[r][c]) state.setupBoard[r][c] = remaining[idx++];
+    }
+  }
+  buildSetupBoard();
+  refreshNumberPad();
+});
+
+document.getElementById('btn-submit-board').addEventListener('click', () => {
+  socket.emit('submit-manual-board', { code: state.code, board: state.setupBoard }, (res) => {
+    if (!res.ok) {
+      showToast(res.error || 'Could not submit board.');
+      return;
+    }
+    document.getElementById('setup-waiting').classList.remove('hidden');
+    document.getElementById('btn-submit-board').disabled = true;
+    document.getElementById('btn-clear-board').disabled = true;
+    document.getElementById('btn-shuffle-remaining').disabled = true;
+    document.querySelectorAll('.pad-btn').forEach((b) => (b.disabled = true));
+  });
+});
+
+socket.on('setup-progress', ({ submittedIds }) => {
+  renderSetupProgress(submittedIds);
+});
+
+function renderSetupProgress(submittedIds) {
+  const list = document.getElementById('setup-progress-list');
+  list.innerHTML = '';
+  state.players.forEach((p) => {
+    const li = document.createElement('li');
+    const dot = document.createElement('span');
+    dot.className = 'player-dot';
+    li.appendChild(dot);
+    li.appendChild(document.createTextNode(p.name));
+    if (submittedIds.includes(p.id)) {
+      const tag = document.createElement('span');
+      tag.className = 'host-tag';
+      tag.textContent = 'READY';
+      li.appendChild(tag);
+    }
+    list.appendChild(li);
+  });
+}
+
+socket.on('setup-complete', () => {
+  stopSetupTimerUI();
+});
+
+function stopSetupTimerUI() {
+  if (state.setupTimerInterval) { clearInterval(state.setupTimerInterval); state.setupTimerInterval = null; }
+}
+
+function startSetupTimerUI(deadline, totalSeconds) {
+  stopSetupTimerUI();
+  const bar = document.getElementById('setup-timer-bar');
+  const tick = () => {
+    const remaining = Math.max(0, deadline - Date.now());
+    const pct = Math.max(0, Math.min(100, (remaining / (totalSeconds * 1000)) * 100));
+    bar.style.width = `${pct}%`;
+    bar.classList.toggle('timer-warning', pct < 30);
+    if (remaining <= 0) stopSetupTimerUI();
+  };
+  tick();
+  state.setupTimerInterval = setInterval(tick, 100);
+}
+
 // ---------- Game ----------
-socket.on('game-started', ({ gridSize, board, winPattern, speedSeconds, players, powerups }) => {
+socket.on('game-ready', ({ gridSize, board, winPattern, speedSeconds, players, powerups }) => {
+  stopSetupTimerUI();
   state.gridSize = gridSize;
   state.board = board;
   state.winPattern = winPattern;
@@ -255,14 +480,11 @@ socket.on('game-started', ({ gridSize, board, winPattern, speedSeconds, players,
 });
 
 function patternTotal(pattern, n) {
-  if (pattern === 'corners') return 4;
   if (pattern === 'x') return n % 2 === 0 ? 2 * n : 2 * n - 1;
-  if (pattern === 'blackout') return n * n;
   return 5; // lines
 }
 
 function patternCellsClient(pattern, n) {
-  if (pattern === 'corners') return [[0, 0], [0, n - 1], [n - 1, 0], [n - 1, n - 1]];
   if (pattern === 'x') {
     const seen = new Set(); const cells = [];
     for (let i = 0; i < n; i++) {
@@ -271,11 +493,6 @@ function patternCellsClient(pattern, n) {
         if (!seen.has(key)) { seen.add(key); cells.push([r, c]); }
       }
     }
-    return cells;
-  }
-  if (pattern === 'blackout') {
-    const cells = [];
-    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) cells.push([r, c]);
     return cells;
   }
   return [];
@@ -577,6 +794,27 @@ function showFloatingReaction(playerName, emoji) {
   container.appendChild(bubble);
   setTimeout(() => bubble.remove(), 2200);
 }
+
+// ---------- Malayalam voice-line reactions ----------
+(function buildVoiceBar() {
+  const bar = document.getElementById('voice-bar');
+  VOICE_LINES.forEach((line) => {
+    const btn = document.createElement('button');
+    btn.className = 'voice-btn';
+    btn.textContent = line.label;
+    btn.addEventListener('click', () => {
+      socket.emit('send-voice-line', { code: state.code, lineId: line.id });
+    });
+    bar.appendChild(btn);
+  });
+})();
+
+socket.on('voice-line', ({ playerName, lineId }) => {
+  const line = VOICE_LINES.find((l) => l.id === lineId);
+  if (!line) return;
+  speakLine(line.text);
+  showFloatingReaction(playerName, line.label);
+});
 
 function showToast(text) {
   const container = document.getElementById('reaction-toasts');

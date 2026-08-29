@@ -9,9 +9,11 @@ const io = new Server(server);
 
 const PORT = process.env.PORT || 3000;
 const LETTERS = ['B', 'I', 'N', 'G', 'O'];
-const WIN_PATTERNS = ['lines', 'corners', 'x', 'blackout'];
+const WIN_PATTERNS = ['lines', 'x'];
 const SPEED_OPTIONS = [0, 10, 15, 30]; // seconds; 0 = off
-const REACTION_EMOJI = ['👍', '😂', '🔥', '😱', '🎉', '😭'];
+const BOARD_MODES = ['random', 'manual'];
+const SETUP_SECONDS_OPTIONS = [120, 180]; // 2 or 3 minutes to fill your board manually
+const REACTION_EMOJI = ['👍', '😂', '🔥', '😱', '🎉', '😭', '🌴', '💥'];
 const POWERUP_TYPES = ['peek', 'skip', 'swap'];
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -62,6 +64,7 @@ function newPlayer(id, name) {
     letters: [false, false, false, false, false],
     matchWins: 0,
     powerups: freshPowerups(),
+    boardSubmitted: false,
   };
 }
 
@@ -74,6 +77,8 @@ function lobbyState(room) {
     started: room.started,
     winPattern: room.winPattern,
     speedSeconds: room.speedSeconds,
+    boardMode: room.boardMode,
+    setupSeconds: room.setupSeconds,
     round: room.round,
     players: room.players.map((p) => ({ id: p.id, name: p.name, ready: true, matchWins: p.matchWins })),
   };
@@ -102,11 +107,8 @@ function countLines(marked, n) {
 }
 
 // Position-based cells for non-classic win patterns. These are the same
-// coordinates for every player regardless of how their board was shuffled.
+// coordinates for every player regardless of how their board is arranged.
 function patternCells(pattern, n) {
-  if (pattern === 'corners') {
-    return [[0, 0], [0, n - 1], [n - 1, 0], [n - 1, n - 1]];
-  }
   if (pattern === 'x') {
     const seen = new Set();
     const cells = [];
@@ -116,11 +118,6 @@ function patternCells(pattern, n) {
         if (!seen.has(key)) { seen.add(key); cells.push([r, c]); }
       }
     }
-    return cells;
-  }
-  if (pattern === 'blackout') {
-    const cells = [];
-    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) cells.push([r, c]);
     return cells;
   }
   return [];
@@ -183,7 +180,7 @@ function advanceTurn(room, steps) {
 }
 
 // Marks `number` on every board that has it (every board contains every
-// number 1..n^2, just shuffled to different cells), recomputes everyone's
+// number 1..n^2, just arranged differently), recomputes everyone's
 // progress, and returns the first player who now satisfies the win pattern
 // (if any).
 function applyCallToAllBoards(room, number) {
@@ -216,12 +213,84 @@ function finishGame(room, winner, draw) {
   });
 }
 
+// ---------- Manual board setup phase ----------
+
+function clearSetupTimer(room) {
+  if (room.setupTimerHandle) {
+    clearTimeout(room.setupTimerHandle);
+    room.setupTimerHandle = null;
+  }
+  room.setupDeadline = null;
+}
+
+// A valid manual board is an n x n grid containing every integer from
+// 1..n^2 exactly once.
+function isValidBoard(board, n) {
+  if (!Array.isArray(board) || board.length !== n) return false;
+  const seen = new Set();
+  for (const row of board) {
+    if (!Array.isArray(row) || row.length !== n) return false;
+    for (const val of row) {
+      const num = Number(val);
+      if (!Number.isInteger(num) || num < 1 || num > n * n) return false;
+      if (seen.has(num)) return false;
+      seen.add(num);
+    }
+  }
+  return seen.size === n * n;
+}
+
+function beginActualGame(room) {
+  clearSetupTimer(room);
+  room.phase = 'playing';
+  room.calledNumbers = [];
+  room.turnIndex = 0;
+  room.players.forEach((p) => {
+    p.marked = emptyMarked(room.gridSize);
+    p.lines = 0;
+    p.letters = [false, false, false, false, false];
+    p.powerups = freshPowerups();
+    io.to(p.id).emit('game-ready', {
+      gridSize: room.gridSize,
+      board: p.board,
+      winPattern: room.winPattern,
+      speedSeconds: room.speedSeconds,
+      round: room.round,
+      players: room.players.map((pp) => ({ id: pp.id, name: pp.name, matchWins: pp.matchWins })),
+      powerups: p.powerups,
+    });
+  });
+  armTurnTimer(room);
+  io.to(room.code).emit('turn-update', turnPayload(room));
+}
+
+// Fills in a random valid board for anyone who never submitted (or
+// submitted something invalid), then transitions to actual gameplay.
+function finalizeSetup(room) {
+  clearSetupTimer(room);
+  room.players.forEach((p) => {
+    if (!p.boardSubmitted || !isValidBoard(p.board, room.gridSize)) {
+      p.board = generateBoard(room.gridSize);
+    }
+  });
+  io.to(room.code).emit('setup-complete');
+  beginActualGame(room);
+}
+
+function armSetupTimer(room) {
+  clearSetupTimer(room);
+  room.setupDeadline = Date.now() + room.setupSeconds * 1000;
+  room.setupTimerHandle = setTimeout(() => finalizeSetup(room), room.setupSeconds * 1000);
+}
+
 io.on('connection', (socket) => {
-  socket.on('create-room', ({ name, gridSize, maxPlayers, winPattern, speedSeconds }, cb) => {
+  socket.on('create-room', ({ name, gridSize, maxPlayers, winPattern, speedSeconds, boardMode, setupSeconds }, cb) => {
     gridSize = [5, 6, 7].includes(gridSize) ? gridSize : 5;
     maxPlayers = Math.min(4, Math.max(2, Number(maxPlayers) || 4));
     winPattern = WIN_PATTERNS.includes(winPattern) ? winPattern : 'lines';
     speedSeconds = SPEED_OPTIONS.includes(Number(speedSeconds)) ? Number(speedSeconds) : 0;
+    boardMode = BOARD_MODES.includes(boardMode) ? boardMode : 'random';
+    setupSeconds = SETUP_SECONDS_OPTIONS.includes(Number(setupSeconds)) ? Number(setupSeconds) : 120;
     const code = makeRoomCode();
     const room = {
       code,
@@ -229,13 +298,18 @@ io.on('connection', (socket) => {
       maxPlayers,
       hostId: socket.id,
       started: false,
+      phase: 'lobby',
       players: [],
       calledNumbers: [],
       turnIndex: 0,
       winPattern,
       speedSeconds,
+      boardMode,
+      setupSeconds,
       turnTimerHandle: null,
       turnDeadline: null,
+      setupTimerHandle: null,
+      setupDeadline: null,
       round: 1,
     };
     rooms[code] = room;
@@ -260,31 +334,48 @@ io.on('connection', (socket) => {
     const room = rooms[code];
     if (!room || room.hostId !== socket.id || room.started) return;
     room.started = true;
-    room.calledNumbers = [];
-    room.turnIndex = 0;
-    room.players.forEach((p) => {
-      p.board = generateBoard(room.gridSize);
-      p.marked = emptyMarked(room.gridSize);
-      p.lines = 0;
-      p.letters = [false, false, false, false, false];
-      p.powerups = freshPowerups();
-      io.to(p.id).emit('game-started', {
-        gridSize: room.gridSize,
-        board: p.board,
-        winPattern: room.winPattern,
-        speedSeconds: room.speedSeconds,
-        round: room.round,
-        players: room.players.map((pp) => ({ id: pp.id, name: pp.name, matchWins: pp.matchWins })),
-        powerups: p.powerups,
+
+    if (room.boardMode === 'manual') {
+      room.phase = 'setup';
+      room.players.forEach((p) => {
+        p.board = null;
+        p.boardSubmitted = false;
       });
+      armSetupTimer(room);
+      io.to(code).emit('setup-started', {
+        gridSize: room.gridSize,
+        setupSeconds: room.setupSeconds,
+        setupDeadline: room.setupDeadline,
+        players: room.players.map((pp) => ({ id: pp.id, name: pp.name })),
+      });
+      return;
+    }
+
+    // Random mode: generate boards immediately and jump straight to play.
+    room.players.forEach((p) => { p.board = generateBoard(room.gridSize); p.boardSubmitted = true; });
+    beginActualGame(room);
+  });
+
+  socket.on('submit-manual-board', ({ code, board }, cb) => {
+    const room = rooms[code];
+    if (!room || room.phase !== 'setup') return cb && cb({ ok: false, error: 'Setup is not active.' });
+    const player = room.players.find((p) => p.id === socket.id);
+    if (!player) return cb && cb({ ok: false, error: 'Player not found.' });
+    if (!isValidBoard(board, room.gridSize)) {
+      return cb && cb({ ok: false, error: `Board must use every number from 1 to ${room.gridSize * room.gridSize} exactly once.` });
+    }
+    player.board = board;
+    player.boardSubmitted = true;
+    cb && cb({ ok: true });
+    io.to(code).emit('setup-progress', {
+      submittedIds: room.players.filter((p) => p.boardSubmitted).map((p) => p.id),
     });
-    armTurnTimer(room);
-    io.to(code).emit('turn-update', turnPayload(room));
+    if (room.players.every((p) => p.boardSubmitted)) finalizeSetup(room);
   });
 
   socket.on('select-cell', ({ code, row, col }) => {
     const room = rooms[code];
-    if (!room || !room.started) return;
+    if (!room || !room.started || room.phase !== 'playing') return;
     const player = room.players.find((p) => p.id === socket.id);
     if (!player || !player.board) return;
     const currentTurnPlayer = room.players[room.turnIndex];
@@ -313,7 +404,7 @@ io.on('connection', (socket) => {
 
   socket.on('use-powerup', ({ code, type, targetId }) => {
     const room = rooms[code];
-    if (!room || !room.started) return;
+    if (!room || !room.started || room.phase !== 'playing') return;
     if (!POWERUP_TYPES.includes(type)) return;
     const player = room.players.find((p) => p.id === socket.id);
     if (!player || !player.board) return;
@@ -388,11 +479,21 @@ io.on('connection', (socket) => {
     io.to(code).emit('reaction', { playerId: player.id, playerName: player.name, emoji });
   });
 
+  socket.on('send-voice-line', ({ code, lineId }) => {
+    const room = rooms[code];
+    if (!room) return;
+    const player = room.players.find((p) => p.id === socket.id);
+    if (!player) return;
+    io.to(code).emit('voice-line', { playerId: player.id, playerName: player.name, lineId });
+  });
+
   socket.on('return-to-lobby', ({ code }) => {
     const room = rooms[code];
     if (!room) return;
     clearTurnTimer(room);
+    clearSetupTimer(room);
     room.started = false;
+    room.phase = 'lobby';
     room.round += 1;
     io.to(code).emit('lobby-update', lobbyState(room));
     io.to(code).emit('returned-to-lobby');
@@ -414,12 +515,19 @@ function handleLeave(socket, code) {
   socket.leave(code);
   if (room.players.length === 0) {
     clearTurnTimer(room);
+    clearSetupTimer(room);
     delete rooms[code];
     return;
   }
   if (room.hostId === socket.id) room.hostId = room.players[0].id;
   io.to(code).emit('lobby-update', lobbyState(room));
-  if (room.started) {
+
+  if (room.phase === 'setup') {
+    if (room.players.every((p) => p.boardSubmitted)) finalizeSetup(room);
+    return;
+  }
+
+  if (room.started && room.phase === 'playing') {
     // Keep the turn pointer valid; if the player who just left was ahead of
     // or at the current turn, the index needs to shift back to stay on track.
     if (leavingIndex !== -1 && leavingIndex <= room.turnIndex) {

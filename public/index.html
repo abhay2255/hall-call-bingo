@@ -52,9 +52,21 @@
         <span>Win pattern</span>
         <div class="chip-row" id="win-pattern-picker">
           <button class="chip active" data-pattern="lines">Classic (5 Lines)</button>
-          <button class="chip" data-pattern="corners">Four Corners</button>
           <button class="chip" data-pattern="x">X Marks the Spot</button>
-          <button class="chip" data-pattern="blackout">Blackout</button>
+        </div>
+      </label>
+      <label class="field">
+        <span>How boards are filled</span>
+        <div class="chip-row" id="board-mode-picker">
+          <button class="chip active" data-mode="random">Random Shuffle</button>
+          <button class="chip" data-mode="manual">Manual Entry</button>
+        </div>
+      </label>
+      <label class="field hidden" id="setup-seconds-field">
+        <span>Time to fill your board</span>
+        <div class="chip-row" id="setup-seconds-picker">
+          <button class="chip active" data-setup-seconds="120">2 minutes</button>
+          <button class="chip" data-setup-seconds="180">3 minutes</button>
         </div>
       </label>
       <label class="field">
@@ -102,7 +114,27 @@
   </div>
 </section>
 
-<!-- SCREEN 3: GAME -->
+<!-- SCREEN 3: MANUAL BOARD SETUP -->
+<section id="screen-setup" class="screen">
+  <h2 class="section-title">Build Your Board</h2>
+  <div class="panel setup-panel">
+    <div class="timer-bar-wrap" id="setup-timer-bar-wrap">
+      <div class="timer-bar" id="setup-timer-bar"></div>
+    </div>
+    <p class="hint" id="setup-hint">Tap a cell, then tap a number below to place it. Every number from 1 to N² must be used exactly once.</p>
+    <div id="setup-board" class="board"></div>
+    <div class="number-pad" id="number-pad"></div>
+    <div class="setup-actions">
+      <button id="btn-clear-board" class="btn btn-ghost">Clear</button>
+      <button id="btn-shuffle-remaining" class="btn btn-ghost">Auto-fill Rest</button>
+      <button id="btn-submit-board" class="btn btn-primary" disabled>Submit Board</button>
+    </div>
+    <p class="setup-waiting hidden" id="setup-waiting">Board submitted! Waiting for other players…</p>
+    <ul class="player-list" id="setup-progress-list"></ul>
+  </div>
+</section>
+
+<!-- SCREEN 4: GAME -->
 <section id="screen-game" class="screen">
   <header class="game-header">
     <div class="room-tag">Room <strong id="game-code"></strong></div>
@@ -145,6 +177,8 @@
         <button class="reaction-btn" data-emoji="🎉">🎉</button>
         <button class="reaction-btn" data-emoji="😭">😭</button>
       </div>
+
+      <div class="voice-bar" id="voice-bar"></div>
     </div>
 
     <aside class="scoreboard panel">

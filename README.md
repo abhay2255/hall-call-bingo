@@ -9,9 +9,14 @@ while the server calls numbers for the whole room.
 - Choose a board size when you create a room: **5×5** (numbers 1–25),
   **6×6** (1–36), or **7×7** (1–49).
 - Choose how many players the room holds: **2, 3, or 4**.
-- Choose a **win pattern**: Classic (5 lines), Four Corners, X Marks the
-  Spot, or Blackout. Cells that matter for Corners/X are outlined in gold
-  on the board.
+- Choose a **win pattern**: Classic (5 lines) or X Marks the Spot. Cells
+  that matter for the X pattern are outlined in gold on the board.
+- Choose how boards are filled: **Random Shuffle** (numbers auto-shuffled
+  for you, like always) or **Manual Entry** — every player gets a blank
+  grid and 2 or 3 minutes (your choice) to place every number from 1 to
+  N² wherever they like before the round starts. Anyone who runs out of
+  time or leaves gaps gets the rest of their board auto-filled randomly so
+  the round can still begin on time.
 - Choose **speed mode**: off, or a 10/15/30 second countdown per turn. Run
   out the clock and your turn is automatically skipped.
 - Once the host starts the game, every player gets their **own board** with
@@ -44,9 +49,12 @@ calling a number on your turn:
 ### Reactions & sound
 
 Tap an emoji under the board to send a floating reaction the whole room
-can see. Numbers get a synthesized "ding" and a spoken call-out
-(browser text-to-speech) as they're called — mute both with the speaker
-icon in the game header.
+can see. There's also a row of fun Malayalam exclamations (Adipoli!,
+Kidilan!, Poli aanu!, and more) — original party-game flavor lines, not
+tied to any real person or ad — spoken aloud via the browser's built-in
+text-to-speech (using a Malayalam voice if the device has one installed).
+Numbers get a synthesized "ding" and a spoken call-out as they're called —
+mute everything with the speaker icon in the game header.
 
 ### Rematch & series score
 
