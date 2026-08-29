@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Hall Call — Multiplayer Bingo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=DM+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+<div class="backdrop"></div>
+
+<!-- SCREEN 1: LANDING -->
+<section id="screen-landing" class="screen active">
+  <div class="marquee">
+    <span class="bulb"></span><span class="bulb"></span><span class="bulb"></span><span class="bulb"></span><span class="bulb"></span>
+  </div>
+  <h1 class="brand">HALL CALL <span class="brand-accent">BINGO</span></h1>
+  <p class="tagline">Pick a grid. Call the room. Daub your way to B‑I‑N‑G‑O.</p>
+
+  <div class="panel entry-panel">
+    <div class="tabs">
+      <button class="tab active" data-tab="create">Create Room</button>
+      <button class="tab" data-tab="join">Join Room</button>
+    </div>
+
+    <div class="tab-panel active" id="tab-create">
+      <label class="field">
+        <span>Your name</span>
+        <input id="create-name" type="text" maxlength="16" placeholder="e.g. Priya" />
+      </label>
+      <label class="field">
+        <span>Board size</span>
+        <div class="chip-row" id="grid-size-picker">
+          <button class="chip active" data-size="5">5 × 5</button>
+          <button class="chip" data-size="6">6 × 6</button>
+          <button class="chip" data-size="7">7 × 7</button>
+        </div>
+      </label>
+      <label class="field">
+        <span>Players in this room</span>
+        <div class="chip-row" id="max-players-picker">
+          <button class="chip" data-players="2">2</button>
+          <button class="chip active" data-players="3">3</button>
+          <button class="chip" data-players="4">4</button>
+        </div>
+      </label>
+      <label class="field">
+        <span>Win pattern</span>
+        <div class="chip-row" id="win-pattern-picker">
+          <button class="chip active" data-pattern="lines">Classic (5 Lines)</button>
+          <button class="chip" data-pattern="corners">Four Corners</button>
+          <button class="chip" data-pattern="x">X Marks the Spot</button>
+          <button class="chip" data-pattern="blackout">Blackout</button>
+        </div>
+      </label>
+      <label class="field">
+        <span>Speed mode</span>
+        <div class="chip-row" id="speed-picker">
+          <button class="chip active" data-speed="0">Off</button>
+          <button class="chip" data-speed="10">10s / turn</button>
+          <button class="chip" data-speed="15">15s / turn</button>
+          <button class="chip" data-speed="30">30s / turn</button>
+        </div>
+      </label>
+      <button id="btn-create-room" class="btn btn-primary">Create Room</button>
+      <p class="error" id="create-error"></p>
+    </div>
+
+    <div class="tab-panel" id="tab-join">
+      <label class="field">
+        <span>Your name</span>
+        <input id="join-name" type="text" maxlength="16" placeholder="e.g. Arjun" />
+      </label>
+      <label class="field">
+        <span>Room code</span>
+        <input id="join-code" type="text" maxlength="4" placeholder="e.g. K7QX" style="text-transform:uppercase;letter-spacing:.2em;" />
+      </label>
+      <button id="btn-join-room" class="btn btn-primary">Join Room</button>
+      <p class="error" id="join-error"></p>
+    </div>
+  </div>
+</section>
+
+<!-- SCREEN 2: LOBBY -->
+<section id="screen-lobby" class="screen">
+  <h2 class="section-title">Waiting Room</h2>
+  <div class="panel lobby-panel">
+    <div class="lobby-code-row">
+      <span class="lobby-label">Room code</span>
+      <span class="lobby-code" id="lobby-code">----</span>
+      <span class="lobby-size" id="lobby-size"></span>
+    </div>
+    <p class="lobby-settings" id="lobby-settings"></p>
+    <ul class="player-list" id="lobby-players"></ul>
+    <p class="hint" id="lobby-hint">Waiting for the host to start the game…</p>
+    <button id="btn-start-game" class="btn btn-primary hidden">Start Game</button>
+    <button id="btn-leave-lobby" class="btn btn-ghost">Leave Room</button>
+  </div>
+</section>
+
+<!-- SCREEN 3: GAME -->
+<section id="screen-game" class="screen">
+  <header class="game-header">
+    <div class="room-tag">Room <strong id="game-code"></strong></div>
+    <div class="caller">
+      <div class="caller-label">Last Called</div>
+      <div class="ball ball-current" id="ball-current">—</div>
+      <div class="ball-trail" id="ball-trail"></div>
+    </div>
+    <button id="btn-sound-toggle" class="btn-icon" title="Toggle sound">🔊</button>
+  </header>
+
+  <div class="timer-bar-wrap hidden" id="timer-bar-wrap">
+    <div class="timer-bar" id="timer-bar"></div>
+  </div>
+
+  <div class="game-body">
+    <div class="board-wrap">
+      <div class="turn-indicator" id="turn-indicator">—</div>
+      <div class="bingo-letters" id="bingo-letters">
+        <span data-letter="B">B</span><span data-letter="I">I</span><span data-letter="N">N</span><span data-letter="G">G</span><span data-letter="O">O</span>
+      </div>
+      <div class="progress-bar-wrap hidden" id="progress-bar-wrap">
+        <div class="progress-bar" id="progress-bar"></div>
+        <span class="progress-label" id="progress-label"></span>
+      </div>
+      <div id="board" class="board"></div>
+      <p class="hint">On your turn, tap a number on your board to call and daub it.</p>
+
+      <div class="powerup-bar">
+        <button class="powerup-btn" id="btn-powerup-peek" data-type="peek" title="Peek: reveal one unmarked number from each opponent's board">👀 Peek</button>
+        <button class="powerup-btn" id="btn-powerup-skip" data-type="skip" title="Skip: skip the next player's turn">⏭️ Skip</button>
+        <button class="powerup-btn" id="btn-powerup-swap" data-type="swap" title="Swap: trade boards with an opponent">🔀 Swap</button>
+      </div>
+
+      <div class="reaction-bar" id="reaction-bar">
+        <button class="reaction-btn" data-emoji="👍">👍</button>
+        <button class="reaction-btn" data-emoji="😂">😂</button>
+        <button class="reaction-btn" data-emoji="🔥">🔥</button>
+        <button class="reaction-btn" data-emoji="😱">😱</button>
+        <button class="reaction-btn" data-emoji="🎉">🎉</button>
+        <button class="reaction-btn" data-emoji="😭">😭</button>
+      </div>
+    </div>
+
+    <aside class="scoreboard panel">
+      <h3>In This Room</h3>
+      <ul id="scoreboard-list"></ul>
+    </aside>
+  </div>
+</section>
+
+<!-- SWAP TARGET PICKER -->
+<div id="overlay-swap-picker" class="overlay hidden">
+  <div class="win-card panel">
+    <h2>Swap Boards With…</h2>
+    <ul class="player-list" id="swap-target-list"></ul>
+    <button id="btn-cancel-swap" class="btn btn-ghost">Cancel</button>
+  </div>
+</div>
+
+<!-- REACTION TOASTS -->
+<div id="reaction-toasts"></div>
+
+<!-- WIN OVERLAY -->
+<div id="overlay-win" class="overlay hidden">
+  <div class="win-card panel">
+    <h2 id="win-title">BINGO!</h2>
+    <p id="win-message"></p>
+    <p class="series-score" id="win-series-score"></p>
+    <button id="btn-rematch" class="btn btn-primary">Rematch</button>
+    <button id="btn-play-again" class="btn btn-ghost">Leave to Menu</button>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/client.js"></script>
+</body>
+</html>
