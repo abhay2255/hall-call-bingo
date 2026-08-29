@@ -313,23 +313,15 @@ body {
 .setup-panel { max-width: 520px; margin: 0 auto; }
 #setup-timer-bar-wrap { margin-bottom: 16px; }
 .setup-cell { cursor: pointer; }
-.setup-cell.selected { box-shadow: 0 0 0 2px var(--gold) inset; background: rgba(232, 169, 59, 0.12); }
-.number-pad {
-  display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-top: 16px;
-}
-.pad-btn {
-  padding: 10px 0; border-radius: 8px; border: 1px solid var(--line); background: rgba(0,0,0,0.2);
-  color: var(--cream); font-family: var(--font-mono); font-weight: 700; cursor: pointer;
-}
-.pad-btn:hover:not(:disabled) { border-color: var(--gold); }
-.pad-btn:disabled { opacity: 0.25; cursor: not-allowed; text-decoration: line-through; }
+.setup-cell.filled { background: var(--gold); color: var(--ink); border-color: var(--gold); font-weight: 700; }
+.setup-cell.filled:hover { opacity: 0.85; }
 .setup-actions { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
 .setup-actions .btn { flex: 1; min-width: 120px; }
 .setup-waiting {
   text-align: center; font-weight: 700; color: var(--gold); margin-top: 14px;
 }
 
-/* ---------- Malayalam voice-line bar ---------- */
+/* ---------- Voice-line bar ---------- */
 .voice-bar { display: flex; gap: 6px; margin-top: 10px; justify-content: center; flex-wrap: wrap; }
 .voice-btn {
   border: 1px solid var(--line); background: rgba(0,0,0,0.2); color: var(--cream);

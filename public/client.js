@@ -2,16 +2,12 @@ const socket = io();
 
 const REACTION_EMOJI = ['👍', '😂', '🔥', '😱', '🎉', '😭', '🌴', '💥'];
 
-// Original Malayalam party-game exclamations (not tied to any real person
-// or ad) used as fun voice-line reactions, spoken via the browser's
-// text-to-speech when a Malayalam voice is available.
+// Real audio clips the player provided, used as fun voice-line reactions
+// anyone in the room can tap during a game.
 const VOICE_LINES = [
-  { id: 'adipoli', label: 'Adipoli!', text: 'Adipoli!' },
-  { id: 'kidilan', label: 'Kidilan!', text: 'Kidilan!' },
-  { id: 'poli', label: 'Poli aanu!', text: 'Poli aanu!' },
-  { id: 'sheri', label: 'Sheri sheri!', text: 'Sheri sheri!' },
-  { id: 'ayyo', label: 'Ayyo!', text: 'Ayyo!' },
-  { id: 'machane', label: 'Machane!', text: 'Machane!' },
+  { id: 'sivane', label: 'Sivane!', src: '/audio/sivane.mp3' },
+  { id: 'oola-keero', label: 'Oola Keero!', src: '/audio/oola-keero.mp3' },
+  { id: 'thank-you', label: 'Thank You', src: '/audio/thank-you.mp3' },
 ];
 
 const state = {
@@ -35,7 +31,6 @@ const state = {
   timerInterval: null,
   setupTimerInterval: null,
   setupBoard: null, // n x n grid, 0 = empty
-  setupSelectedCell: null, // [r, c] or null
 };
 
 // ---------- Sound & voice ----------
@@ -74,19 +69,29 @@ function speakNumber(number) {
   window.speechSynthesis.speak(utter);
 }
 
-function speakLine(text) {
+// Preload each voice clip once; play() clones the node each time so two
+// taps in quick succession (or two different players' clips) can overlap
+// instead of cutting each other off.
+const voiceClipCache = new Map();
+function getVoiceClip(src) {
+  if (!voiceClipCache.has(src)) {
+    const audio = new Audio(src);
+    audio.preload = 'auto';
+    voiceClipCache.set(src, audio);
+  }
+  return voiceClipCache.get(src);
+}
+function playVoiceClip(lineId) {
   if (!state.soundOn) return;
-  if (!window.speechSynthesis) return;
-  window.speechSynthesis.cancel();
-  const utter = new SpeechSynthesisUtterance(text);
-  // Prefer a Malayalam voice if the browser/OS has one installed; otherwise
-  // this just falls back to whatever default voice reads it phonetically.
-  const voices = window.speechSynthesis.getVoices();
-  const mlVoice = voices.find((v) => v.lang && v.lang.toLowerCase().startsWith('ml'));
-  if (mlVoice) utter.voice = mlVoice;
-  utter.rate = 1;
-  utter.pitch = 1.1;
-  window.speechSynthesis.speak(utter);
+  const line = VOICE_LINES.find((l) => l.id === lineId);
+  if (!line) return;
+  const base = getVoiceClip(line.src);
+  const instance = base.cloneNode(true);
+  instance.volume = 1;
+  instance.play().catch(() => {
+    // Autoplay can be blocked until the user has interacted with the page
+    // at least once — nothing to do, it'll work on the next tap.
+  });
 }
 
 document.getElementById('btn-sound-toggle').addEventListener('click', () => {
@@ -282,12 +287,10 @@ socket.on('setup-started', ({ gridSize, setupSeconds, setupDeadline, players }) 
   state.gridSize = gridSize;
   state.setupSeconds = setupSeconds;
   state.setupBoard = Array.from({ length: gridSize }, () => Array(gridSize).fill(0));
-  state.setupSelectedCell = null;
   state.players = players;
   document.getElementById('setup-waiting').classList.add('hidden');
   document.getElementById('btn-submit-board').disabled = true;
   buildSetupBoard();
-  buildNumberPad();
   renderSetupProgress([]);
   startSetupTimerUI(setupDeadline, setupSeconds);
   showScreen('screen-setup');
@@ -303,34 +306,11 @@ function buildSetupBoard() {
       cell.className = 'cell setup-cell';
       cell.dataset.row = r;
       cell.dataset.col = c;
-      const val = state.setupBoard[r][c];
-      cell.textContent = val || '';
-      cell.addEventListener('click', () => selectSetupCell(r, c));
+      cell.addEventListener('click', () => tapSetupCell(r, c));
       boardEl.appendChild(cell);
     }
   }
-}
-
-function selectSetupCell(r, c) {
-  state.setupSelectedCell = [r, c];
-  document.querySelectorAll('.setup-cell').forEach((el) => {
-    el.classList.toggle('selected', Number(el.dataset.row) === r && Number(el.dataset.col) === c);
-  });
-}
-
-function buildNumberPad() {
-  const total = state.gridSize * state.gridSize;
-  const pad = document.getElementById('number-pad');
-  pad.innerHTML = '';
-  for (let n = 1; n <= total; n++) {
-    const btn = document.createElement('button');
-    btn.className = 'pad-btn';
-    btn.textContent = n;
-    btn.dataset.number = n;
-    btn.addEventListener('click', () => placeNumber(n));
-    pad.appendChild(btn);
-  }
-  refreshNumberPad();
+  renderSetupBoardValues();
 }
 
 function usedNumbers() {
@@ -339,34 +319,41 @@ function usedNumbers() {
   return used;
 }
 
-function refreshNumberPad() {
-  const used = usedNumbers();
-  document.querySelectorAll('.pad-btn').forEach((btn) => {
-    const n = Number(btn.dataset.number);
-    btn.disabled = used.has(n);
-  });
-  const total = state.gridSize * state.gridSize;
-  document.getElementById('btn-submit-board').disabled = used.size < total;
+// Tapping an empty cell fills it with the next number in sequence (1, 2,
+// 3…). Tapping an already-numbered cell clears it and shifts every higher
+// number down by one, so the board always stays a contiguous 1..count run
+// with no gaps — e.g. tapping "1" removes it and what was "2" becomes the
+// new "1", freeing you to place 1 somewhere else.
+function tapSetupCell(r, c) {
+  const current = state.setupBoard[r][c];
+  if (current) {
+    for (let rr = 0; rr < state.gridSize; rr++) {
+      for (let cc = 0; cc < state.gridSize; cc++) {
+        if (state.setupBoard[rr][cc] > current) state.setupBoard[rr][cc] -= 1;
+      }
+    }
+    state.setupBoard[r][c] = 0;
+  } else {
+    state.setupBoard[r][c] = usedNumbers().size + 1;
+  }
+  renderSetupBoardValues();
 }
 
-function placeNumber(n) {
-  if (!state.setupSelectedCell) {
-    showToast('Tap a cell on the board first, then a number.');
-    return;
-  }
-  const used = usedNumbers();
-  if (used.has(n)) return; // already placed elsewhere
-  const [r, c] = state.setupSelectedCell;
-  state.setupBoard[r][c] = n;
-  const cellEl = document.querySelector(`.setup-cell[data-row="${r}"][data-col="${c}"]`);
-  if (cellEl) cellEl.textContent = n;
-  refreshNumberPad();
+function renderSetupBoardValues() {
+  document.querySelectorAll('.setup-cell').forEach((cellEl) => {
+    const r = Number(cellEl.dataset.row);
+    const c = Number(cellEl.dataset.col);
+    const val = state.setupBoard[r][c];
+    cellEl.textContent = val || '';
+    cellEl.classList.toggle('filled', !!val);
+  });
+  const total = state.gridSize * state.gridSize;
+  document.getElementById('btn-submit-board').disabled = usedNumbers().size < total;
 }
 
 document.getElementById('btn-clear-board').addEventListener('click', () => {
   state.setupBoard = state.setupBoard.map((row) => row.map(() => 0));
-  buildSetupBoard();
-  refreshNumberPad();
+  renderSetupBoardValues();
 });
 
 document.getElementById('btn-shuffle-remaining').addEventListener('click', () => {
@@ -384,8 +371,7 @@ document.getElementById('btn-shuffle-remaining').addEventListener('click', () =>
       if (!state.setupBoard[r][c]) state.setupBoard[r][c] = remaining[idx++];
     }
   }
-  buildSetupBoard();
-  refreshNumberPad();
+  renderSetupBoardValues();
 });
 
 document.getElementById('btn-submit-board').addEventListener('click', () => {
@@ -398,7 +384,7 @@ document.getElementById('btn-submit-board').addEventListener('click', () => {
     document.getElementById('btn-submit-board').disabled = true;
     document.getElementById('btn-clear-board').disabled = true;
     document.getElementById('btn-shuffle-remaining').disabled = true;
-    document.querySelectorAll('.pad-btn').forEach((b) => (b.disabled = true));
+    document.querySelectorAll('.setup-cell').forEach((el) => el.classList.add('board-disabled'));
   });
 });
 
@@ -795,7 +781,7 @@ function showFloatingReaction(playerName, emoji) {
   setTimeout(() => bubble.remove(), 2200);
 }
 
-// ---------- Malayalam voice-line reactions ----------
+// ---------- Voice-line reactions (real audio clips) ----------
 (function buildVoiceBar() {
   const bar = document.getElementById('voice-bar');
   VOICE_LINES.forEach((line) => {
@@ -812,7 +798,7 @@ function showFloatingReaction(playerName, emoji) {
 socket.on('voice-line', ({ playerName, lineId }) => {
   const line = VOICE_LINES.find((l) => l.id === lineId);
   if (!line) return;
-  speakLine(line.text);
+  playVoiceClip(lineId);
   showFloatingReaction(playerName, line.label);
 });
 
