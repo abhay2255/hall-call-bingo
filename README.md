@@ -1,24 +1,27 @@
-# Hall Call — Multiplayer Bingo
+# Hall Call — Multiplayer Games
 
-A real-time multiplayer Bingo web app. One player creates a room, 1–3 friends
-join with a 4-letter code, and everyone plays on their own shuffled board
-while the server calls numbers for the whole room.
+Real-time multiplayer party games. Pick **Hall Call Bingo** or **Grid Wars**
+from the landing screen, one player creates a room, 1–3 friends join with a
+4-letter code, and everyone plays together over Socket.IO.
 
-## How the game works
+## Hall Call Bingo
 
 - Choose a board size when you create a room: **5×5** (numbers 1–25),
   **6×6** (1–36), or **7×7** (1–49).
 - Choose how many players the room holds: **2, 3, or 4**.
-- Choose a **win pattern**: Classic (5 lines) or X Marks the Spot. Cells
-  that matter for the X pattern are outlined in gold on the board.
+- Win pattern is the classic **5 lines** (rows/columns/diagonals) — the
+  "X Marks the Spot" pattern has been removed.
 - Choose how boards are filled: **Random Shuffle** (numbers auto-shuffled
   for you, like always) or **Manual Entry** — every player gets a blank
-  grid and 2 or 3 minutes (your choice) to place every number from 1 to
-  N² wherever they like before the round starts. Anyone who runs out of
-  time or leaves gaps gets the rest of their board auto-filled randomly so
-  the round can still begin on time.
+  grid and taps cells in order to fill in 1, 2, 3… (tap a filled cell again
+  to remove it — everything after it shifts back automatically). Anyone
+  who runs out of time or leaves gaps gets the rest of their board
+  auto-filled randomly so the round can still begin on time.
 - Choose **speed mode**: off, or a 10/15/30 second countdown per turn. Run
   out the clock and your turn is automatically skipped.
+- **Board mode, setup time, and speed mode can all be changed from the
+  lobby screen too** — not just at room creation — so the host can switch
+  a room to Manual Entry (or back) before any round, including rematches.
 - Once the host starts the game, every player gets their **own board** with
   the numbers shuffled independently.
 - Play happens **in turns**, cycling through the players in the order they
@@ -32,7 +35,7 @@ while the server calls numbers for the whole room.
 - A number can only ever be called once — once it's out, it's marked
   everywhere it appears and can't be selected again.
 - After each turn, play passes to the next player automatically.
-- First player to complete the room's chosen win pattern wins the round.
+- First player to complete 5 lines wins the round.
 
 ### Power-ups
 
@@ -49,12 +52,11 @@ calling a number on your turn:
 ### Reactions & sound
 
 Tap an emoji under the board to send a floating reaction the whole room
-can see. There's also a row of fun Malayalam exclamations (Adipoli!,
-Kidilan!, Poli aanu!, and more) — original party-game flavor lines, not
-tied to any real person or ad — spoken aloud via the browser's built-in
-text-to-speech (using a Malayalam voice if the device has one installed).
-Numbers get a synthesized "ding" and a spoken call-out as they're called —
-mute everything with the speaker icon in the game header.
+can see. There's also a row of **voice-line buttons** using real audio
+clips — tapping one plays the clip and broadcasts it to everyone in the
+room in real time. Numbers get a synthesized "ding" and a spoken call-out
+as they're called — mute everything with the speaker icon in the game
+header.
 
 ### Rematch & series score
 
@@ -64,8 +66,24 @@ player's win count carries across rounds and is shown in the lobby, on the
 scoreboard, and on the end-of-round screen — handy for a best-of-3 or
 best-of-5 series.
 
+## Grid Wars (dots and boxes)
+
+- Pick **⚡ Grid Wars** on the landing screen instead of Bingo.
+- Choose a box grid size (**3×3**, **4×4**, or **5×5** boxes) and how many
+  players (2–4) when creating the room.
+- Play happens **in turns**. On your turn, tap any undrawn line between two
+  dots to draw it.
+- Complete the 4th side of a box and you **claim it and get an extra turn**
+  — the classic dots-and-boxes bonus-turn rule. Keep chaining boxes as long
+  as you keep completing them.
+- Each player is assigned a color, shown on their drawn lines, claimed
+  boxes, and in the scoreboard.
+- When every line on the board is drawn, the player with the most boxes
+  wins. Ties are a draw. Rematch and series-win tracking work the same way
+  as Bingo.
+
 No database is used — everything lives in server memory for the lifetime of
-the process, which is all a game like this needs.
+the process, which is all games like this need.
 
 ## Project structure
 

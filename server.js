@@ -9,7 +9,7 @@ const io = new Server(server);
 
 const PORT = process.env.PORT || 3000;
 const LETTERS = ['B', 'I', 'N', 'G', 'O'];
-const WIN_PATTERNS = ['lines', 'x'];
+const WIN_PATTERNS = ['lines'];
 const SPEED_OPTIONS = [0, 10, 15, 30]; // seconds; 0 = off
 const BOARD_MODES = ['random', 'manual'];
 const SETUP_SECONDS_OPTIONS = [120, 180]; // 2 or 3 minutes to fill your board manually
@@ -65,12 +65,26 @@ function newPlayer(id, name) {
     matchWins: 0,
     powerups: freshPowerups(),
     boardSubmitted: false,
+    score: 0, // used by Grid Wars
   };
 }
 
 function lobbyState(room) {
+  if (room.gameType === 'grid-wars') {
+    return {
+      code: room.code,
+      gameType: 'grid-wars',
+      boxSize: room.boxSize,
+      maxPlayers: room.maxPlayers,
+      hostId: room.hostId,
+      started: room.started,
+      round: room.round,
+      players: room.players.map((p) => ({ id: p.id, name: p.name, ready: true, matchWins: p.matchWins })),
+    };
+  }
   return {
     code: room.code,
+    gameType: 'bingo',
     gridSize: room.gridSize,
     maxPlayers: room.maxPlayers,
     hostId: room.hostId,
@@ -283,8 +297,93 @@ function armSetupTimer(room) {
   room.setupTimerHandle = setTimeout(() => finalizeSetup(room), room.setupSeconds * 1000);
 }
 
+// ---------- Grid Wars (dots and boxes) ----------
+
+const BOX_SIZE_OPTIONS = [3, 4, 5];
+
+function newGridWarsPlayer(id, name) {
+  return { id, name: (name || 'Player').slice(0, 16), score: 0, matchWins: 0 };
+}
+
+// hEdges is (n+1) rows x n cols — hEdges[i][j] is the horizontal edge
+// between dot(i,j) and dot(i,j+1). vEdges is n rows x (n+1) cols —
+// vEdges[i][j] is the vertical edge between dot(i,j) and dot(i+1,j).
+function emptyEdges(n) {
+  const hEdges = Array.from({ length: n + 1 }, () => Array(n).fill(false));
+  const vEdges = Array.from({ length: n }, () => Array(n + 1).fill(false));
+  return { hEdges, vEdges };
+}
+
+function gridWarsTurnPayload(room) {
+  const p = room.players[room.turnIndex];
+  return { currentPlayerId: p ? p.id : null, currentPlayerName: p ? p.name : null };
+}
+
+function startGridWarsGame(room) {
+  room.started = true;
+  room.phase = 'playing';
+  const n = room.boxSize;
+  const { hEdges, vEdges } = emptyEdges(n);
+  room.hEdges = hEdges;
+  room.vEdges = vEdges;
+  room.boxOwner = Array.from({ length: n }, () => Array(n).fill(null));
+  room.edgesDrawn = 0;
+  room.turnIndex = 0;
+  room.players.forEach((p) => { p.score = 0; });
+  io.to(room.code).emit('gridwars-started', {
+    boxSize: n,
+    players: room.players.map((p) => ({ id: p.id, name: p.name, score: 0, matchWins: p.matchWins })),
+  });
+  io.to(room.code).emit('gridwars-turn', gridWarsTurnPayload(room));
+}
+
+function finishGridWars(room) {
+  room.started = false;
+  let winner = null;
+  let maxScore = -1;
+  let tie = false;
+  room.players.forEach((p) => {
+    if (p.score > maxScore) { maxScore = p.score; winner = p; tie = false; }
+    else if (p.score === maxScore) { tie = true; }
+  });
+  if (tie) winner = null;
+  if (winner) winner.matchWins += 1;
+  io.to(room.code).emit('gridwars-over', {
+    winner: winner ? winner.name : null,
+    winnerId: winner ? winner.id : null,
+    draw: !winner,
+    scores: room.players.map((p) => ({ id: p.id, name: p.name, score: p.score, matchWins: p.matchWins })),
+    round: room.round,
+  });
+}
+
 io.on('connection', (socket) => {
-  socket.on('create-room', ({ name, gridSize, maxPlayers, winPattern, speedSeconds, boardMode, setupSeconds }, cb) => {
+  socket.on('create-room', (payload, cb) => {
+    const { name, gameType } = payload || {};
+    if (gameType === 'grid-wars') {
+      let boxSize = BOX_SIZE_OPTIONS.includes(Number(payload.boxSize)) ? Number(payload.boxSize) : 4;
+      let maxPlayers = Math.min(4, Math.max(2, Number(payload.maxPlayers) || 4));
+      const code = makeRoomCode();
+      const room = {
+        code,
+        gameType: 'grid-wars',
+        boxSize,
+        maxPlayers,
+        hostId: socket.id,
+        started: false,
+        phase: 'lobby',
+        players: [],
+        turnIndex: 0,
+        round: 1,
+      };
+      rooms[code] = room;
+      room.players.push(newGridWarsPlayer(socket.id, name));
+      socket.join(code);
+      cb && cb({ ok: true, room: lobbyState(room) });
+      return;
+    }
+
+    let { gridSize, maxPlayers, winPattern, speedSeconds, boardMode, setupSeconds } = payload;
     gridSize = [5, 6, 7].includes(gridSize) ? gridSize : 5;
     maxPlayers = Math.min(4, Math.max(2, Number(maxPlayers) || 4));
     winPattern = WIN_PATTERNS.includes(winPattern) ? winPattern : 'lines';
@@ -294,6 +393,7 @@ io.on('connection', (socket) => {
     const code = makeRoomCode();
     const room = {
       code,
+      gameType: 'bingo',
       gridSize,
       maxPlayers,
       hostId: socket.id,
@@ -318,13 +418,27 @@ io.on('connection', (socket) => {
     cb && cb({ ok: true, room: lobbyState(room) });
   });
 
+  socket.on('update-room-settings', ({ code, boardMode, setupSeconds, speedSeconds }) => {
+    const room = rooms[code];
+    if (!room || room.hostId !== socket.id || room.started) return;
+    if (room.gameType === 'grid-wars') return; // nothing adjustable here yet
+    if (boardMode !== undefined && BOARD_MODES.includes(boardMode)) room.boardMode = boardMode;
+    if (setupSeconds !== undefined && SETUP_SECONDS_OPTIONS.includes(Number(setupSeconds))) {
+      room.setupSeconds = Number(setupSeconds);
+    }
+    if (speedSeconds !== undefined && SPEED_OPTIONS.includes(Number(speedSeconds))) {
+      room.speedSeconds = Number(speedSeconds);
+    }
+    io.to(code).emit('lobby-update', lobbyState(room));
+  });
+
   socket.on('join-room', ({ name, code }, cb) => {
     code = (code || '').toUpperCase();
     const room = rooms[code];
     if (!room) return cb && cb({ ok: false, error: 'Room not found. Check the code.' });
     if (room.started) return cb && cb({ ok: false, error: 'This game already started.' });
     if (room.players.length >= room.maxPlayers) return cb && cb({ ok: false, error: 'Room is full.' });
-    room.players.push(newPlayer(socket.id, name));
+    room.players.push(room.gameType === 'grid-wars' ? newGridWarsPlayer(socket.id, name) : newPlayer(socket.id, name));
     socket.join(code);
     io.to(code).emit('lobby-update', lobbyState(room));
     cb && cb({ ok: true, room: lobbyState(room) });
@@ -333,6 +447,12 @@ io.on('connection', (socket) => {
   socket.on('start-game', ({ code }) => {
     const room = rooms[code];
     if (!room || room.hostId !== socket.id || room.started) return;
+
+    if (room.gameType === 'grid-wars') {
+      startGridWarsGame(room);
+      return;
+    }
+
     room.started = true;
 
     if (room.boardMode === 'manual') {
@@ -400,6 +520,65 @@ io.on('connection', (socket) => {
     if (room.calledNumbers.length >= total) { finishGame(room, null, true); return; }
 
     advanceTurn(room, 1);
+  });
+
+  socket.on('select-edge', ({ code, orientation, row, col }) => {
+    const room = rooms[code];
+    if (!room || !room.started || room.gameType !== 'grid-wars' || room.phase !== 'playing') return;
+    const currentTurnPlayer = room.players[room.turnIndex];
+    if (!currentTurnPlayer || currentTurnPlayer.id !== socket.id) return; // not your turn
+
+    const n = room.boxSize;
+    let edges, maxRow, maxCol;
+    if (orientation === 'h') { edges = room.hEdges; maxRow = n; maxCol = n - 1; }
+    else if (orientation === 'v') { edges = room.vEdges; maxRow = n - 1; maxCol = n; }
+    else return;
+    if (row < 0 || row > maxRow || col < 0 || col > maxCol) return;
+    if (edges[row][col]) return; // already drawn
+
+    edges[row][col] = true;
+    room.edgesDrawn += 1;
+    io.to(code).emit('edge-drawn', { orientation, row, col, playerId: socket.id });
+
+    // Figure out which box(es) border this edge, and claim any that are
+    // now fully surrounded.
+    const boxesToCheck = [];
+    if (orientation === 'h') {
+      if (row - 1 >= 0) boxesToCheck.push([row - 1, col]); // box above
+      if (row < n) boxesToCheck.push([row, col]); // box below
+    } else {
+      if (col - 1 >= 0) boxesToCheck.push([row, col - 1]); // box to the left
+      if (col < n) boxesToCheck.push([row, col]); // box to the right
+    }
+
+    let claimedAny = false;
+    boxesToCheck.forEach(([br, bc]) => {
+      if (room.boxOwner[br][bc]) return; // already claimed
+      const top = room.hEdges[br][bc];
+      const bottom = room.hEdges[br + 1][bc];
+      const left = room.vEdges[br][bc];
+      const right = room.vEdges[br][bc + 1];
+      if (top && bottom && left && right) {
+        room.boxOwner[br][bc] = currentTurnPlayer.id;
+        currentTurnPlayer.score += 1;
+        claimedAny = true;
+        io.to(code).emit('box-claimed', {
+          row: br, col: bc, playerId: currentTurnPlayer.id, playerName: currentTurnPlayer.name, score: currentTurnPlayer.score,
+        });
+      }
+    });
+
+    const totalEdges = (n + 1) * n + n * (n + 1);
+    if (room.edgesDrawn >= totalEdges) {
+      finishGridWars(room);
+      return;
+    }
+
+    // Completing a box earns another turn — classic dots-and-boxes rule.
+    if (!claimedAny) {
+      room.turnIndex = (room.turnIndex + 1) % room.players.length;
+    }
+    io.to(code).emit('gridwars-turn', gridWarsTurnPayload(room));
   });
 
   socket.on('use-powerup', ({ code, type, targetId }) => {
@@ -521,6 +700,21 @@ function handleLeave(socket, code) {
   }
   if (room.hostId === socket.id) room.hostId = room.players[0].id;
   io.to(code).emit('lobby-update', lobbyState(room));
+
+  if (room.gameType === 'grid-wars') {
+    if (room.started && room.phase === 'playing') {
+      if (leavingIndex !== -1 && leavingIndex <= room.turnIndex) {
+        room.turnIndex = Math.max(0, room.turnIndex - 1);
+      }
+      if (room.turnIndex >= room.players.length) room.turnIndex = 0;
+      if (room.players.length < 2) {
+        finishGridWars(room);
+      } else {
+        io.to(code).emit('gridwars-turn', gridWarsTurnPayload(room));
+      }
+    }
+    return;
+  }
 
   if (room.phase === 'setup') {
     if (room.players.every((p) => p.boardSubmitted)) finalizeSetup(room);

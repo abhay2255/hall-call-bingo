@@ -7,6 +7,10 @@
   --cream: #f4ecd8;
   --muted: #8fb2af;
   --line: rgba(244, 236, 216, 0.12);
+  --p1: var(--gold);
+  --p2: var(--coral);
+  --p3: #4ea8de;
+  --p4: #7ed957;
   --font-display: 'Archivo Black', sans-serif;
   --font-body: 'Inter', sans-serif;
   --font-mono: 'DM Mono', monospace;
@@ -329,3 +333,48 @@ body {
   font-family: var(--font-body);
 }
 .voice-btn:hover { border-color: var(--gold); background: rgba(232, 169, 59, 0.12); }
+
+/* ---------- Game type toggle (landing) ---------- */
+.game-type-toggle { display: flex; gap: 8px; margin-bottom: 20px; }
+.game-type-btn {
+  padding: 10px 18px; border-radius: 999px; border: 1px solid var(--line); cursor: pointer;
+  background: rgba(0,0,0,0.2); color: var(--muted); font-family: var(--font-body); font-weight: 700; font-size: 0.85rem;
+}
+.game-type-btn.active { background: var(--gold); color: var(--ink); border-color: var(--gold); }
+
+/* ---------- Lobby host settings ---------- */
+.host-settings { margin: 4px 0 12px; padding: 14px; border-radius: 12px; background: rgba(0,0,0,0.16); border: 1px solid var(--line); }
+.host-settings .field:last-child { margin-bottom: 0; }
+
+/* ---------- Grid Wars board ---------- */
+.gw-board-wrap { display: flex; flex-direction: column; align-items: center; }
+.gridwars-board { display: grid; margin: 8px auto; }
+.gw-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); justify-self: center; align-self: center; }
+.gw-edge { cursor: pointer; border-radius: 4px; background: rgba(244, 236, 216, 0.10); transition: background 0.1s; }
+.gw-edge:hover:not(.drawn) { background: rgba(232, 169, 59, 0.45); }
+.gw-edge.drawn { cursor: default; }
+.gw-edge-h { align-self: center; height: 7px; }
+.gw-edge-v { justify-self: center; width: 7px; }
+.gw-edge.locked { cursor: not-allowed; }
+.gw-edge.locked:hover:not(.drawn) { background: rgba(244, 236, 216, 0.10); }
+.gw-box {
+  border-radius: 6px; background: rgba(0,0,0,0.18); display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-mono); font-weight: 700; font-size: 0.75rem; color: var(--ink);
+}
+
+/* ---------- Grid Wars header/turn/scoreboard ---------- */
+.gw-turn-indicator {
+  padding: 8px 16px; border-radius: 10px; background: rgba(0,0,0,0.2); border: 1px solid var(--line);
+  font-weight: 700; font-size: 0.85rem; color: var(--muted);
+}
+.gw-turn-indicator.my-turn { background: var(--coral); color: var(--cream); border-color: var(--coral); }
+#gw-scoreboard-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+#gw-scoreboard-list li {
+  padding: 10px 12px; border-radius: 10px; background: rgba(0,0,0,0.18);
+  font-weight: 600; font-size: 0.9rem; display: flex; align-items: center; gap: 8px; justify-content: space-between;
+}
+#gw-scoreboard-list li.is-you { border: 1px solid var(--gold); }
+#gw-scoreboard-list li.active-turn { background: rgba(232, 101, 78, 0.25); }
+.gw-player-name { display: flex; align-items: center; gap: 8px; }
+.gw-color-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.gw-score { font-family: var(--font-mono); color: var(--muted); }

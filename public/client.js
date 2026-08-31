@@ -13,7 +13,9 @@ const VOICE_LINES = [
 const state = {
   name: '',
   code: '',
+  gameType: 'bingo',
   gridSize: 5,
+  boxSize: 4,
   maxPlayers: 3,
   winPattern: 'lines',
   speedSeconds: 0,
@@ -31,6 +33,8 @@ const state = {
   timerInterval: null,
   setupTimerInterval: null,
   setupBoard: null, // n x n grid, 0 = empty
+  gwPlayers: [], // Grid Wars: [{id, name, score, matchWins}], order fixes color assignment
+  gwMyTurn: false,
 };
 
 // ---------- Sound & voice ----------
@@ -116,6 +120,29 @@ document.querySelectorAll('.tab').forEach((tab) => {
   });
 });
 
+// ---------- Landing: game type ----------
+document.getElementById('game-type-toggle').addEventListener('click', (e) => {
+  const btn = e.target.closest('.game-type-btn');
+  if (!btn) return;
+  state.gameType = btn.dataset.game;
+  document.querySelectorAll('.game-type-btn').forEach((b) => b.classList.toggle('active', b === btn));
+  const isGridWars = state.gameType === 'grid-wars';
+  document.getElementById('bingo-settings-group').classList.toggle('hidden', isGridWars);
+  document.getElementById('gridwars-settings-group').classList.toggle('hidden', !isGridWars);
+  document.getElementById('brand-accent').textContent = isGridWars ? 'GAMES' : 'BINGO';
+  document.getElementById('landing-tagline').textContent = isGridWars
+    ? 'Draw dots-and-boxes lines. Close a square, score a point, keep going.'
+    : 'Pick a grid. Call the room. Daub your way to B‑I‑N‑G‑O.';
+});
+
+document.getElementById('box-size-picker').addEventListener('click', (e) => {
+  const btn = e.target.closest('.chip');
+  if (!btn) return;
+  document.querySelectorAll('#box-size-picker .chip').forEach((c) => c.classList.remove('active'));
+  btn.classList.add('active');
+  state.boxSize = Number(btn.dataset.boxsize);
+});
+
 document.getElementById('grid-size-picker').addEventListener('click', (e) => {
   const btn = e.target.closest('.chip');
   if (!btn) return;
@@ -130,14 +157,6 @@ document.getElementById('max-players-picker').addEventListener('click', (e) => {
   document.querySelectorAll('#max-players-picker .chip').forEach((c) => c.classList.remove('active'));
   btn.classList.add('active');
   state.maxPlayers = Number(btn.dataset.players);
-});
-
-document.getElementById('win-pattern-picker').addEventListener('click', (e) => {
-  const btn = e.target.closest('.chip');
-  if (!btn) return;
-  document.querySelectorAll('#win-pattern-picker .chip').forEach((c) => c.classList.remove('active'));
-  btn.classList.add('active');
-  state.winPattern = btn.dataset.pattern;
 });
 
 document.getElementById('board-mode-picker').addEventListener('click', (e) => {
@@ -169,8 +188,30 @@ document.getElementById('speed-picker').addEventListener('click', (e) => {
 document.getElementById('btn-create-room').addEventListener('click', () => {
   const name = document.getElementById('create-name').value.trim() || 'Player';
   state.name = name;
+
+  if (state.gameType === 'grid-wars') {
+    socket.emit('create-room', {
+      name,
+      gameType: 'grid-wars',
+      boxSize: state.boxSize,
+      maxPlayers: state.maxPlayers,
+    }, (res) => {
+      if (!res.ok) {
+        document.getElementById('create-error').textContent = res.error || 'Could not create room.';
+        return;
+      }
+      state.code = res.room.code;
+      state.gameType = 'grid-wars';
+      state.isHost = true;
+      renderLobby(res.room);
+      showScreen('screen-lobby');
+    });
+    return;
+  }
+
   socket.emit('create-room', {
     name,
+    gameType: 'bingo',
     gridSize: state.gridSize,
     maxPlayers: state.maxPlayers,
     winPattern: state.winPattern,
@@ -183,6 +224,7 @@ document.getElementById('btn-create-room').addEventListener('click', () => {
       return;
     }
     state.code = res.room.code;
+    state.gameType = 'bingo';
     state.isHost = true;
     renderLobby(res.room);
     showScreen('screen-lobby');
@@ -199,6 +241,7 @@ document.getElementById('btn-join-room').addEventListener('click', () => {
       return;
     }
     state.code = res.room.code;
+    state.gameType = res.room.gameType || 'bingo';
     state.gridSize = res.room.gridSize;
     state.isHost = res.room.hostId === socket.id;
     renderLobby(res.room);
@@ -209,23 +252,50 @@ document.getElementById('btn-join-room').addEventListener('click', () => {
 // ---------- Lobby ----------
 const PATTERN_LABELS = {
   lines: 'Classic — 5 Lines',
-  x: 'X Marks the Spot',
 };
 
 function renderLobby(room) {
-  state.gridSize = room.gridSize;
-  state.winPattern = room.winPattern || 'lines';
-  state.speedSeconds = room.speedSeconds || 0;
-  state.boardMode = room.boardMode || 'random';
-  state.setupSeconds = room.setupSeconds || 120;
-  document.getElementById('lobby-code').textContent = room.code;
-  document.getElementById('lobby-size').textContent = `${room.gridSize}×${room.gridSize} board · up to ${room.maxPlayers} players`;
-  const speedLabel = state.speedSeconds ? `${state.speedSeconds}s per turn` : 'no timer';
-  const boardModeLabel = state.boardMode === 'manual'
-    ? `Manual boards (${state.setupSeconds / 60} min to fill)`
-    : 'Random boards';
-  document.getElementById('lobby-settings').textContent =
-    `${PATTERN_LABELS[state.winPattern] || 'Classic'} · ${boardModeLabel} · ${speedLabel}` + (room.round > 1 ? ` · Round ${room.round}` : '');
+  state.gameType = room.gameType || 'bingo';
+  state.isHost = room.hostId === socket.id;
+
+  if (state.gameType === 'grid-wars') {
+    state.boxSize = room.boxSize;
+    document.getElementById('lobby-code').textContent = room.code;
+    document.getElementById('lobby-size').textContent = `${room.boxSize}×${room.boxSize} boxes · up to ${room.maxPlayers} players`;
+    document.getElementById('lobby-settings').textContent =
+      'Grid Wars — draw lines, close boxes, score points' + (room.round > 1 ? ` · Round ${room.round}` : '');
+    document.getElementById('lobby-host-settings').classList.add('hidden');
+  } else {
+    state.gridSize = room.gridSize;
+    state.winPattern = room.winPattern || 'lines';
+    state.speedSeconds = room.speedSeconds || 0;
+    state.boardMode = room.boardMode || 'random';
+    state.setupSeconds = room.setupSeconds || 120;
+    document.getElementById('lobby-code').textContent = room.code;
+    document.getElementById('lobby-size').textContent = `${room.gridSize}×${room.gridSize} board · up to ${room.maxPlayers} players`;
+    const speedLabel = state.speedSeconds ? `${state.speedSeconds}s per turn` : 'no timer';
+    const boardModeLabel = state.boardMode === 'manual'
+      ? `Manual boards (${state.setupSeconds / 60} min to fill)`
+      : 'Random boards';
+    document.getElementById('lobby-settings').textContent =
+      `${PATTERN_LABELS[state.winPattern] || 'Classic'} · ${boardModeLabel} · ${speedLabel}` + (room.round > 1 ? ` · Round ${room.round}` : '');
+
+    const hostSettings = document.getElementById('lobby-host-settings');
+    hostSettings.classList.toggle('hidden', !state.isHost);
+    if (state.isHost) {
+      document.querySelectorAll('#lobby-board-mode-picker .chip').forEach((c) => {
+        c.classList.toggle('active', c.dataset.mode === state.boardMode);
+      });
+      document.getElementById('lobby-setup-seconds-field').classList.toggle('hidden', state.boardMode !== 'manual');
+      document.querySelectorAll('#lobby-setup-seconds-picker .chip').forEach((c) => {
+        c.classList.toggle('active', Number(c.dataset.setupSeconds) === state.setupSeconds);
+      });
+      document.querySelectorAll('#lobby-speed-picker .chip').forEach((c) => {
+        c.classList.toggle('active', Number(c.dataset.speed) === state.speedSeconds);
+      });
+    }
+  }
+
   const list = document.getElementById('lobby-players');
   list.innerHTML = '';
   room.players.forEach((p) => {
@@ -248,7 +318,6 @@ function renderLobby(room) {
     }
     list.appendChild(li);
   });
-  state.isHost = room.hostId === socket.id;
   const startBtn = document.getElementById('btn-start-game');
   const hint = document.getElementById('lobby-hint');
   if (state.isHost) {
@@ -262,6 +331,24 @@ function renderLobby(room) {
     hint.textContent = 'Waiting for the host to start the game…';
   }
 }
+
+document.getElementById('lobby-board-mode-picker').addEventListener('click', (e) => {
+  const btn = e.target.closest('.chip');
+  if (!btn || !state.isHost) return;
+  socket.emit('update-room-settings', { code: state.code, boardMode: btn.dataset.mode });
+});
+
+document.getElementById('lobby-setup-seconds-picker').addEventListener('click', (e) => {
+  const btn = e.target.closest('.chip');
+  if (!btn || !state.isHost) return;
+  socket.emit('update-room-settings', { code: state.code, setupSeconds: Number(btn.dataset.setupSeconds) });
+});
+
+document.getElementById('lobby-speed-picker').addEventListener('click', (e) => {
+  const btn = e.target.closest('.chip');
+  if (!btn || !state.isHost) return;
+  socket.emit('update-room-settings', { code: state.code, speedSeconds: Number(btn.dataset.speed) });
+});
 
 document.getElementById('btn-start-game').addEventListener('click', () => {
   socket.emit('start-game', { code: state.code });
@@ -810,3 +897,184 @@ function showToast(text) {
   container.appendChild(toast);
   setTimeout(() => toast.remove(), 3200);
 }
+
+// ---------- Grid Wars (dots and boxes) ----------
+const PLAYER_COLORS = ['var(--p1)', 'var(--p2)', 'var(--p3)', 'var(--p4)'];
+
+function gwColorFor(playerId) {
+  const idx = state.gwPlayers.findIndex((p) => p.id === playerId);
+  return PLAYER_COLORS[idx >= 0 ? idx % PLAYER_COLORS.length : 0];
+}
+
+document.getElementById('btn-gw-sound-toggle').addEventListener('click', () => {
+  state.soundOn = !state.soundOn;
+  document.getElementById('btn-gw-sound-toggle').textContent = state.soundOn ? '🔊' : '🔇';
+  document.getElementById('btn-sound-toggle').textContent = state.soundOn ? '🔊' : '🔇';
+});
+
+socket.on('gridwars-started', ({ boxSize, players }) => {
+  state.boxSize = boxSize;
+  state.gwPlayers = players;
+  state.gwMyTurn = false;
+  document.getElementById('gw-game-code').textContent = state.code;
+  buildGridWarsBoard(boxSize);
+  renderGwScoreboard(null);
+  showScreen('screen-gridwars');
+});
+
+function buildGridWarsBoard(n) {
+  const boardEl = document.getElementById('gw-board');
+  boardEl.innerHTML = '';
+  // 2n+1 tracks per axis: dot, edge-span, dot, edge-span, ..., dot.
+  const tracks = [];
+  for (let i = 0; i < 2 * n + 1; i++) tracks.push(i % 2 === 0 ? '10px' : 'minmax(26px, 1fr)');
+  boardEl.style.gridTemplateColumns = tracks.join(' ');
+  boardEl.style.gridTemplateRows = tracks.join(' ');
+
+  // Dots
+  for (let i = 0; i <= n; i++) {
+    for (let j = 0; j <= n; j++) {
+      const dot = document.createElement('div');
+      dot.className = 'gw-dot';
+      dot.style.gridRow = String(2 * i + 1);
+      dot.style.gridColumn = String(2 * j + 1);
+      boardEl.appendChild(dot);
+    }
+  }
+  // Horizontal edges: hEdges[i][j], i in [0,n], j in [0,n-1]
+  for (let i = 0; i <= n; i++) {
+    for (let j = 0; j < n; j++) {
+      const edge = document.createElement('div');
+      edge.className = 'gw-edge gw-edge-h';
+      edge.dataset.orientation = 'h';
+      edge.dataset.row = i;
+      edge.dataset.col = j;
+      edge.style.gridRow = String(2 * i + 1);
+      edge.style.gridColumn = String(2 * j + 2);
+      edge.addEventListener('click', () => onGwEdgeClick('h', i, j));
+      boardEl.appendChild(edge);
+    }
+  }
+  // Vertical edges: vEdges[i][j], i in [0,n-1], j in [0,n]
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j <= n; j++) {
+      const edge = document.createElement('div');
+      edge.className = 'gw-edge gw-edge-v';
+      edge.dataset.orientation = 'v';
+      edge.dataset.row = i;
+      edge.dataset.col = j;
+      edge.style.gridRow = String(2 * i + 2);
+      edge.style.gridColumn = String(2 * j + 1);
+      edge.addEventListener('click', () => onGwEdgeClick('v', i, j));
+      boardEl.appendChild(edge);
+    }
+  }
+  // Boxes
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      const box = document.createElement('div');
+      box.className = 'gw-box';
+      box.dataset.row = i;
+      box.dataset.col = j;
+      box.style.gridRow = String(2 * i + 2);
+      box.style.gridColumn = String(2 * j + 2);
+      boardEl.appendChild(box);
+    }
+  }
+  applyGwLockState();
+}
+
+function onGwEdgeClick(orientation, row, col) {
+  if (!state.gwMyTurn) return;
+  const el = document.querySelector(`.gw-edge[data-orientation="${orientation}"][data-row="${row}"][data-col="${col}"]`);
+  if (!el || el.classList.contains('drawn')) return;
+  socket.emit('select-edge', { code: state.code, orientation, row, col });
+}
+
+function applyGwLockState() {
+  document.querySelectorAll('.gw-edge').forEach((el) => {
+    el.classList.toggle('locked', !state.gwMyTurn);
+  });
+}
+
+socket.on('edge-drawn', ({ orientation, row, col, playerId }) => {
+  const el = document.querySelector(`.gw-edge[data-orientation="${orientation}"][data-row="${row}"][data-col="${col}"]`);
+  if (!el) return;
+  el.classList.add('drawn');
+  el.style.background = gwColorFor(playerId);
+});
+
+socket.on('box-claimed', ({ row, col, playerId, playerName, score }) => {
+  const el = document.querySelector(`.gw-box[data-row="${row}"][data-col="${col}"]`);
+  if (el) {
+    el.style.background = gwColorFor(playerId);
+    el.textContent = playerName ? playerName[0].toUpperCase() : '';
+  }
+  const p = state.gwPlayers.find((pp) => pp.id === playerId);
+  if (p) p.score = score;
+  renderGwScoreboard(null);
+  if (playerId === socket.id) playDing();
+});
+
+socket.on('gridwars-turn', ({ currentPlayerId, currentPlayerName }) => {
+  state.gwMyTurn = currentPlayerId === socket.id;
+  const indicator = document.getElementById('gw-turn-indicator');
+  if (state.gwMyTurn) {
+    indicator.textContent = 'Your turn — draw a line!';
+    indicator.classList.add('my-turn');
+  } else {
+    indicator.textContent = `Waiting for ${currentPlayerName || 'the next player'}…`;
+    indicator.classList.remove('my-turn');
+  }
+  applyGwLockState();
+  renderGwScoreboard(currentPlayerId);
+});
+
+function renderGwScoreboard(activePlayerId) {
+  const list = document.getElementById('gw-scoreboard-list');
+  list.innerHTML = '';
+  state.gwPlayers.forEach((p, idx) => {
+    const li = document.createElement('li');
+    if (p.id === socket.id) li.classList.add('is-you');
+    if (activePlayerId && p.id === activePlayerId) li.classList.add('active-turn');
+
+    const nameWrap = document.createElement('span');
+    nameWrap.className = 'gw-player-name';
+    const dot = document.createElement('span');
+    dot.className = 'gw-color-dot';
+    dot.style.background = PLAYER_COLORS[idx % PLAYER_COLORS.length];
+    nameWrap.appendChild(dot);
+    nameWrap.appendChild(document.createTextNode(p.name + (p.id === socket.id ? ' (you)' : '')));
+
+    const score = document.createElement('span');
+    score.className = 'gw-score';
+    score.textContent = `${p.score || 0} box${p.score === 1 ? '' : 'es'}`;
+
+    li.appendChild(nameWrap);
+    li.appendChild(score);
+    list.appendChild(li);
+  });
+}
+
+socket.on('gridwars-over', ({ winner, winnerId, draw, scores }) => {
+  const overlay = document.getElementById('overlay-win');
+  const title = document.getElementById('win-title');
+  const msg = document.getElementById('win-message');
+  if (draw) {
+    title.textContent = "IT'S A TIE!";
+    msg.textContent = 'Every box is claimed and scores are level. Run it back!';
+  } else if (winnerId === socket.id) {
+    title.textContent = 'GRID WARS — YOU WIN 🎉';
+    msg.textContent = 'You claimed the most boxes.';
+  } else {
+    title.textContent = 'GRID WARS OVER';
+    msg.textContent = `${winner} claimed the most boxes.`;
+  }
+  const seriesEl = document.getElementById('win-series-score');
+  if (scores && scores.length) {
+    seriesEl.textContent = 'Scores: ' + scores.map((p) => `${p.name} ${p.score}`).join(' · ');
+  } else {
+    seriesEl.textContent = '';
+  }
+  overlay.classList.remove('hidden');
+});
